@@ -1,3 +1,6 @@
+import time
+import uuid
+
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.core.urlresolvers import reverse
@@ -24,8 +27,9 @@ from django_rq.queues import (
     get_unique_connection_configs, DjangoRQ
 )
 from django_rq import thread_queue
+from django_rq.settings import QUEUES_LIST
 from django_rq.templatetags.django_rq import to_localtime
-from django_rq.workers import get_worker
+from django_rq.workers import get_worker, collect_workers_by_connection, get_all_workers_by_configuration
 
 
 try:
@@ -44,6 +48,11 @@ def access_self():
 
 def divide(a, b):
     return a / b
+
+
+def long_running_job(timeout=10):
+    time.sleep(timeout)
+    return 'Done sleeping...'
 
 
 def get_failed_queue_index(name='default'):
@@ -312,6 +321,7 @@ class DecoratorTest(TestCase):
         # Ensure that decorator passes in the right queue from settings.py
         queue_name = 'test3'
         config = QUEUES[queue_name]
+
         @job(queue_name)
         def test():
             pass
@@ -361,6 +371,15 @@ class WorkersTest(TestCase):
         failed_queue = Queue(name='failed', connection=queue.connection)
         self.assertFalse(job.id in failed_queue.job_ids)
         job.delete()
+
+    def test_collects_worker_various_connections_get_multiple_collection(self):
+        queues = [
+            {'name': 'default', 'connection_config': settings.RQ_QUEUES['default']},
+            {'name': 'django_rq_test', 'connection_config': settings.RQ_QUEUES['django_rq_test']},
+            {'name': 'test3', 'connection_config': settings.RQ_QUEUES['test3']},
+        ]
+        collections = collect_workers_by_connection(queues)
+        self.assertEqual(len(collections), 2)
 
 
 @override_settings(RQ={'AUTOCOMMIT': True})
@@ -505,6 +524,45 @@ class ViewTest(TestCase):
             reverse('rq_deferred_jobs', args=[queue_index])
         )
         self.assertEqual(response.context['jobs'], [job])
+
+    def test_get_all_workers(self):
+        worker1 = get_worker()
+        worker2 = get_worker('test')
+        workers_collections = [
+            {'config': {'some_config': 1}, 'all_workers': [worker1]},
+            {'config': {'some_config': 2}, 'all_workers': [worker2]},
+        ]
+        result = get_all_workers_by_configuration({'some_config': 1}, workers_collections)
+        self.assertEqual(result, [worker1])
+
+    def test_workers(self):
+        """Worker index page should show workers for a specific queue"""
+        queue = get_queue('django_rq_test')
+        queue_index = get_queue_index('django_rq_test')
+
+        worker1 = get_worker('django_rq_test', name=uuid.uuid4().hex)
+        worker1.register_birth()
+
+        worker2 = get_worker('test3')
+        worker2.register_birth()
+
+        response = self.client.get(
+            reverse('rq_workers', args=[queue_index])
+        )
+        self.assertEqual(response.context['workers'], [worker1])
+
+    def test_worker_details(self):
+        """Worker index page should show workers for a specific queue"""
+        queue = get_queue('django_rq_test')
+        queue_index = get_queue_index('django_rq_test')
+
+        worker = get_worker('django_rq_test', name=uuid.uuid4().hex)
+        worker.register_birth()
+
+        response = self.client.get(
+            reverse('rq_worker_details', args=[queue_index, worker.key])
+        )
+        self.assertEqual(response.context['worker'], worker)
 
 
 class ThreadQueueTest(TestCase):
