@@ -151,6 +151,11 @@ def get_queue_by_index(index):
     config = QUEUES_LIST[int(index)]
     if config['name'] == 'failed':
         return FailedQueue(connection=get_redis_connection(config['connection_config']))
+    if config['name'] == 'scheduled':
+        scheduled_queue = get_scheduler()
+        scheduled_queue.name = 'scheduled'
+        scheduled_queue.key = scheduled_queue.scheduled_jobs_key
+        return scheduled_queue
     return get_queue_class(config)(
         config['name'],
         connection=get_redis_connection(config['connection_config']),

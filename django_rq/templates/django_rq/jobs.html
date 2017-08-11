@@ -68,7 +68,7 @@
                             </th>
                             <th><div class = 'text'><span>ID</span></div></th>
                             <th><div class = 'text'><span>Created</span></div></th>
-                            <th><div class = 'text'><span>Enqueued</span></div></th>
+                            <th><div class = 'text'><span>{% if queue.name == 'scheduled' %}Scheduled for{% else %}Enqueued{% endif %}</span></div></th>
                             <th><div class = 'text'><span>Status</span></div></th>
                             <th><div class = 'text'><span>Callable</span></div></th>
                         </tr>
@@ -85,7 +85,12 @@
                                     </a>
                                 </th>
                                 <td>{{ job.created_at|to_localtime|date:"Y-m-d, H:i:s" }}</td>
-                                <td>{{ job.enqueued_at|to_localtime|date:"Y-m-d, H:i:s" }}</td>
+                                <td>{% if queue.name == 'scheduled' %}
+                                    {{ job.scheduled_for|to_localtime|date:"Y-m-d, H:i:s" }}
+                                    {% else %}
+                                    {{ job.enqueued_at|to_localtime|date:"Y-m-d, H:i:s" }}
+                                    {% endif %}
+                                </td>
                                 <td>{{ job.get_status }}</td>
                                 <td>{{ job.func_name }}</td>
                             </tr>

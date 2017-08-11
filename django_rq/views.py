@@ -1,6 +1,7 @@
 from __future__ import division
 
 from math import ceil
+from datetime import datetime
 
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
@@ -31,12 +32,12 @@ def stats(request):
 
         queue_data = {
             'name': queue.name,
-            'jobs': queue.count,
+            'jobs': queue.count() if queue.name == 'scheduled' else queue.count,
             'index': index,
             'connection_kwargs': connection.connection_pool.connection_kwargs
         }
 
-        if queue.name == 'failed':
+        if queue.name in ['failed', 'scheduled']:
             queue_data['workers'] = '-'
             queue_data['finished_jobs'] = '-'
             queue_data['started_jobs'] = '-'
@@ -70,14 +71,20 @@ def jobs(request, queue_index):
     queue = get_queue_by_index(queue_index)
 
     items_per_page = 100
-    num_jobs = queue.count
+    num_jobs = queue.count() if queue.name == 'scheduled' else queue.count
     page = int(request.GET.get('page', 1))
 
     if num_jobs > 0:
         last_page = int(ceil(num_jobs / items_per_page))
         page_range = range(1, last_page + 1)
         offset = items_per_page * (page - 1)
-        jobs = queue.get_jobs(offset, items_per_page)
+        if queue.name == 'scheduled':
+            scheduled_jobs = queue.get_jobs(offset=offset, length=items_per_page, with_times=True)
+            for j in scheduled_jobs:
+                j[0].scheduled_for = j[1]
+            jobs = [j[0] for j in scheduled_jobs]
+        else:
+            jobs = queue.get_jobs(offset, items_per_page)
     else:
         jobs = []
         page_range = []
@@ -250,6 +257,8 @@ def job_detail(request, queue_index, job_id):
     queue = get_queue_by_index(queue_index)
     try:
         job = Job.fetch(job_id, connection=queue.connection)
+        if queue.name == 'scheduled':
+            job.scheduled_for = datetime.utcfromtimestamp(float(queue.connection.zscore(queue.key, job_id)))
     except NoSuchJobError:
         raise Http404("Couldn't find job with this ID: %s" % job_id)
 
@@ -269,7 +278,10 @@ def delete_job(request, queue_index, job_id):
 
     if request.method == 'POST':
         # Remove job id from queue and delete the actual job
-        queue.connection._lrem(queue.key, 0, job.id)
+        if queue.name == 'scheduled':
+            queue.connection.zrem(queue.key, 0, job.id)
+        else:
+            queue.connection._lrem(queue.key, 0, job.id)
         job.delete()
         messages.info(request, 'You have successfully deleted %s' % job.id)
         return redirect('rq_jobs', queue_index)
@@ -341,7 +353,7 @@ def requeue_all(request, queue_index):
     context_data = {
         'queue_index': queue_index,
         'queue': queue,
-        'total_jobs':len(jobs),
+        'total_jobs': len(jobs),
     }
 
     return render(request, 'django_rq/requeue_all.html', context_data)
@@ -371,7 +383,10 @@ def actions(request, queue_index):
                 for job_id in job_ids:
                     job = Job.fetch(job_id, connection=queue.connection)
                     # Remove job id from queue and delete the actual job
-                    queue.connection._lrem(queue.key, 0, job.id)
+                    if queue.name == 'scheduled':
+                        queue.connection.zrem(queue.key, 0, job.id)
+                    else:
+                        queue.connection._lrem(queue.key, 0, job.id)
                     job.delete()
                 messages.info(request, 'You have successfully deleted %s jobs!' % len(job_ids))
             elif request.POST['action'] == 'requeue':
